@@ -1,0 +1,71 @@
+# metrics.yaml — Logistics / Warehouse / Trade company example
+#
+# This file defines company-specific KPIs for a logistics business.
+# Run `datadiff diff before.csv after.csv` in this directory and
+# these metrics will be evaluated automatically as Layer 4.
+#
+# To generate your own version, run:
+#   datadiff init --from your_data.csv --business "describe your company"
+
+business_context: |
+  We operate a regional logistics and warehouse business. Our core dataset
+  tracks daily order flows across multiple warehouses. Key performance metrics
+  are inventory turnover, dead stock rate, and order cancellation rate.
+  A sudden drop in any region's order volume often signals a data pipeline
+  issue or a real supply chain disruption — both require immediate attention.
+
+metrics:
+
+  # Dead stock: SKUs with no outbound movement in the last 90 days.
+  # Anything above 15% needs investigation; above 30% is a serious problem.
+  - name: dead_stock_rate
+    description: "% of SKUs with no outbound movement in the last 90 days"
+    type: staleness
+    column: last_outbound_date
+    threshold_days: 90
+    warn_if_above: 0.15
+    fail_if_above: 0.30
+
+  # Average order value = total revenue / total units shipped.
+  # A drop >10% may indicate pricing issues or mix shift toward low-value SKUs.
+  - name: avg_revenue_per_unit
+    description: "Average revenue per shipped unit (total revenue / total units)"
+    type: ratio
+    numerator: revenue
+    denominator: units_shipped
+    warn_if_delta_pct: 0.10
+    fail_if_delta_pct: 0.25
+
+  # Cancellation rate: too many cancelled orders signals inventory or ops issues.
+  - name: cancellation_rate
+    description: "% of orders with status = 'cancelled'"
+    type: rate
+    column: status
+    match_value: cancelled
+    warn_if_above: 0.05
+    fail_if_above: 0.12
+
+  # Return rate: products being returned is a quality/satisfaction signal.
+  - name: return_rate
+    description: "% of orders with status = 'returned'"
+    type: rate
+    column: status
+    match_value: returned
+    warn_if_above: 0.08
+    fail_if_above: 0.15
+
+  # Order ID completeness: every order must have an ID.
+  - name: order_id_completeness
+    description: "order_id must never be null"
+    type: completeness
+    column: order_id
+    warn_if_below: 0.999
+    fail_if_below: 0.990
+
+  # High-value orders: % of orders with revenue > $1000.
+  # A sudden drop suggests large customers stopped ordering.
+  - name: high_value_order_share
+    description: "% of orders with revenue > $1000"
+    type: custom
+    expression: "(df['revenue'] > 1000).mean()"
+    warn_if_delta_pct: 0.20

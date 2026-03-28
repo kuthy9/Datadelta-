@@ -1,0 +1,55 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "datadelta"
+version = "0.2.0"
+description = "git diff, but for your data"
+readme = "README.md"
+requires-python = ">=3.10"
+
+dependencies = [
+    # CLI framework - typer builds on Click, gives us argument parsing + help text for free
+    "typer>=0.12",
+    # Rich terminal output - colors, tables, panels, progress bars
+    "rich>=13",
+    # Core data processing
+    "pandas>=2.0",
+    # DuckDB: embedded SQL engine, reads CSV/JSON/Parquet directly without import
+    "duckdb>=0.10",
+    # Statistical tests: KS test, chi-square
+    "scipy>=1.12",
+    # LLM API for --story mode and datadiff init
+    "anthropic>=0.25",
+    # HTML report templating
+    "jinja2>=3.1",
+    # Excel support (.xlsx, .xls)
+    "openpyxl>=3.1",
+    # metrics.yaml parsing
+    "pyyaml>=6.0",
+    # SQL database connections (PostgreSQL, MySQL, MSSQL, etc.)
+    "sqlalchemy>=2.0",
+]
+
+# Optional extras: install only what you need
+# pip install datadelta[postgres]
+# pip install datadelta[mysql]
+# pip install datadelta[watch]
+[project.optional-dependencies]
+postgres = ["psycopg2-binary>=2.9"]     # PostgreSQL driver
+mysql    = ["pymysql>=1.1"]             # MySQL driver
+mssql    = ["pyodbc>=5.0"]              # SQL Server driver
+watch    = ["watchdog>=4.0"]            # File watching for --watch mode
+all      = [
+    "psycopg2-binary>=2.9",
+    "pymysql>=1.1",
+    "watchdog>=4.0",
+]
+
+# This is where pip install creates the `datadiff` command in the user's shell
+[project.scripts]
+datadiff = "datadiff.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/datadiff"]

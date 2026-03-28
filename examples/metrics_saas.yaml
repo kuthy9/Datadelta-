@@ -1,0 +1,65 @@
+# metrics.yaml — SaaS / Product Analytics company example
+#
+# This file defines KPIs for a B2B SaaS product team.
+# The dataset tracks user activity events or daily active user snapshots.
+
+business_context: |
+  We are a B2B SaaS company. Our dataset captures daily user activity metrics
+  per account. Key metrics are activation rate (new users completing onboarding),
+  paid conversion rate, and churn signals. We track features on a per-account
+  basis. A sudden change in any of these metrics may indicate a product change,
+  a billing issue, or a data collection problem.
+
+metrics:
+
+  # Activation: % of users who completed the onboarding flow
+  - name: activation_rate
+    description: "% of users with onboarding_completed = true"
+    type: rate
+    column: onboarding_completed
+    match_value: true
+    warn_if_below: 0.40
+    fail_if_below: 0.25
+
+  # Paid conversion: % of accounts on a paid plan
+  - name: paid_conversion_rate
+    description: "% of accounts on a paid plan (plan != 'free')"
+    type: custom
+    expression: "(df['plan'] != 'free').mean()"
+    warn_if_delta_pct: 0.10
+    fail_if_delta_pct: 0.20
+
+  # Revenue per account: total MRR / number of active accounts
+  - name: avg_mrr_per_account
+    description: "Average MRR per active account"
+    type: ratio
+    numerator: mrr
+    denominator: account_id
+    warn_if_delta_pct: 0.10
+
+  # Churn signal: accounts with no activity in the last 14 days
+  - name: at_risk_rate
+    description: "% of accounts with no activity in the last 14 days (churn signal)"
+    type: staleness
+    column: last_active_date
+    threshold_days: 14
+    warn_if_above: 0.20
+    fail_if_above: 0.35
+
+  # Email completeness: required for all communications
+  - name: email_completeness
+    description: "User email must always be present"
+    type: completeness
+    column: email
+    warn_if_below: 0.995
+    fail_if_below: 0.980
+
+  # Enterprise accounts: % of accounts on enterprise plan
+  # A drop here is a serious revenue risk signal
+  - name: enterprise_account_share
+    description: "% of accounts on the enterprise plan"
+    type: rate
+    column: plan
+    match_value: enterprise
+    warn_if_delta_pct: 0.15
+    fail_if_delta_pct: 0.30
