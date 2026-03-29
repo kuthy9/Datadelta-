@@ -1,0 +1,67 @@
+# requirements.txt — datadelta core dependencies
+#
+# For most users, installing via pip is enough:
+#   pip install datadelta
+#
+# This file exists for contributors and developers who want to
+# set up a local development environment directly:
+#   pip install -r requirements.txt
+#
+# Optional database drivers and extras are listed at the bottom.
+# Uncomment the ones you need.
+
+# ── CLI framework ─────────────────────────────────────────────────────────────
+# Typer wraps Click; turns Python type annotations into CLI flags automatically
+typer>=0.12
+
+# ── Terminal output ───────────────────────────────────────────────────────────
+# Rich provides colors, tables, panels, and progress bars in the terminal
+rich>=13
+
+# ── Core data processing ──────────────────────────────────────────────────────
+pandas>=2.0
+numpy>=1.24               # bundled with pandas but pinned explicitly for scipy compat
+
+# ── Embedded SQL engine ───────────────────────────────────────────────────────
+# DuckDB reads CSV / JSON / Parquet directly with a SQL query — no import step
+duckdb>=0.10
+
+# ── Statistical tests ─────────────────────────────────────────────────────────
+# KS test (distribution shift), chi-square (categorical drift)
+scipy>=1.12
+
+# ── LLM APIs ─────────────────────────────────────────────────────────────────
+# Required for --story mode and `datadelta init`
+# At least one of these must be installed depending on your --llm choice
+anthropic>=0.25           # --llm claude  (default)
+openai>=1.0               # --llm openai or --llm deepseek (DeepSeek is OpenAI-compatible)
+google-generativeai>=0.5  # --llm gemini
+
+# ── Templating ────────────────────────────────────────────────────────────────
+# Used by --export to render the self-contained HTML report
+jinja2>=3.1
+
+# ── Excel support ─────────────────────────────────────────────────────────────
+# openpyxl is the engine pandas uses for .xlsx files
+openpyxl>=3.1
+
+# ── YAML parsing ─────────────────────────────────────────────────────────────
+# Used to load metrics.yaml
+pyyaml>=6.0
+
+# ── SQL database connections ──────────────────────────────────────────────────
+# SQLAlchemy provides a unified interface for all SQL databases
+# The actual driver (psycopg2, pymysql, etc.) must also be installed
+sqlalchemy>=2.0
+
+# ── Optional: database drivers ────────────────────────────────────────────────
+# Uncomment the driver(s) you need:
+#
+# psycopg2-binary>=2.9   # PostgreSQL
+# pymysql>=1.1           # MySQL
+# pyodbc>=5.0            # SQL Server (also requires ODBC driver on your OS)
+
+# ── Optional: watch mode ──────────────────────────────────────────────────────
+# Required for --watch flag (re-run diff when files change)
+#
+# watchdog>=4.0
