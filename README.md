@@ -42,7 +42,13 @@ One mark carries the urgency: ▲ in vermilion, for what fails. The rest is ink 
 
 Requires Python 3.10 or newer. The PyPI distribution is named `datadelta-cli` (the names `datadelta` and `datadiff` belong to other projects); the command and the Python package are both `datadelta`.
 
-Until the first PyPI release, install from a clone:
+Install the wheel attached to the [v0.3.0 release](https://github.com/kuthy9/Datadelta-/releases/tag/v0.3.0):
+
+```bash
+pip install https://github.com/kuthy9/Datadelta-/releases/download/v0.3.0/datadelta_cli-0.3.0-py3-none-any.whl
+```
+
+Or, until the first PyPI release, install from a clone (for development, or for the optional extras below):
 
 ```bash
 git clone https://github.com/kuthy9/Datadelta-.git
@@ -103,6 +109,47 @@ datadelta diff examples/etl_before.csv examples/etl_after.csv --story --llm deep
 cp examples/metrics_logistics.yaml metrics.yaml
 datadelta diff examples/logistics_before.csv examples/logistics_after.csv
 ```
+
+---
+
+## Screenshots
+
+Real runs, captured from a terminal. Each image is the `datadelta` command itself, run in a pseudo-terminal on the demo data; `scripts/capture_screenshots.py` regenerates all of them. The two samples above and under [Cleaning](#cleaning) come from `scripts/render_readme_assets.py`.
+
+### Live progress, mid-run
+
+`datadelta diff big_before.csv big_after.csv --clean --scenario etl`, on two files of 700,000 and 560,164 rows.
+
+![The live progress view on stderr, halfway through cleaning the second file](docs/screenshots/live-progress.png)
+
+While it works, datadelta draws its progress on stderr: one line per stage with a vermilion bar, what the stage is doing right now, and how long it has taken. The tally at the bottom counts findings as they arrive. When the run ends the view folds into a single `✓ 8 stages · …` line, so only the report stays on screen. In a pipe or a CI log it prints one plain `[datadelta] …` line per stage instead, and `-q` silences it.
+
+### The finished run
+
+The same command, once it is done.
+
+![The finished diff --clean report on 700,000 rows](docs/screenshots/diff-clean-finished.png)
+
+The `clean` layer lists what was standardized on each side: padded region names trimmed, `N/A` read as empty, `yes`/`no` as booleans, `$1,234.56` as numbers, `2024/01/05` as dates. Because both sides are typed the same way, the schema layer reports no changes, and what remains are the real ones: 20% of the order ids are gone (fail), the APAC region disappeared and the score distribution moved (warn). The process exits with `1` because there is a fail.
+
+### Your own KPIs
+
+`cp examples/metrics_logistics.yaml metrics.yaml`, then `datadelta diff examples/logistics_before.csv examples/logistics_after.csv --clean`.
+
+![Custom metrics from metrics.yaml evaluated on the logistics demo](docs/screenshots/custom-metrics.png)
+
+The `custom metrics` layer evaluates the KPIs defined in `metrics.yaml` on both sides and checks them against their thresholds. Here the dead-stock rate and the cancellation rate cross their fail thresholds; the other four stay within bounds. These findings keep the severity you set: scenarios never re-weight them.
+
+### The HTML report
+
+`datadelta diff examples/etl_before.csv examples/etl_after.csv --scenario etl --export report.html`
+
+<p>
+  <img src="docs/screenshots/html-report-light.png" alt="The exported HTML report, light color scheme" width="49%">
+  <img src="docs/screenshots/html-report-dark.png" alt="The exported HTML report, dark color scheme" width="49%">
+</p>
+
+One self-contained page to attach or share: the verdict first, then the row count and each layer's findings with their details. Nothing is loaded from the network, every value from the data is escaped, and the page follows the reader's light or dark setting.
 
 ---
 

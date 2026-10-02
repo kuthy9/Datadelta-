@@ -126,6 +126,32 @@ def test_sample_images_are_referenced_and_exist():
         assert (ASSETS / name).is_file(), name
 
 
+SCREENSHOTS = PROJECT_ROOT / "docs" / "screenshots"
+IMAGE_LINK  = re.compile(r'!\[[^\]]*\]\(([^)\s]+)\)|<img[^>]*\bsrc="([^"]+)"')
+
+
+def test_every_local_image_in_the_readme_exists():
+    links = [a or b for a, b in IMAGE_LINK.findall(TEXT)]
+    local = [link for link in links if not link.startswith(("http://", "https://"))]
+    assert local, "README shows no local images"
+    for link in local:
+        assert (PROJECT_ROOT / link).is_file(), link
+
+
+def test_screenshots_section_shows_real_runs():
+    # scripts/capture_screenshots.py writes these from real `datadelta` runs.
+    assert "## Screenshots" in TEXT
+    for name in ("live-progress.png", "diff-clean-finished.png", "custom-metrics.png",
+                 "html-report-light.png", "html-report-dark.png"):
+        assert f"docs/screenshots/{name}" in TEXT, name
+        assert (SCREENSHOTS / name).is_file(), name
+    assert "scripts/capture_screenshots.py" in TEXT
+
+
+def test_install_from_the_release_wheel_is_documented():
+    assert "releases/download/v0.3.0/datadelta_cli-0.3.0-py3-none-any.whl" in TEXT
+
+
 def test_text_sample_is_the_generated_output():
     # scripts/render_readme_assets.py writes docs/assets/diff.txt; the README quotes it verbatim.
     sample = (ASSETS / "diff.txt").read_text(encoding="utf-8").strip("\n")
