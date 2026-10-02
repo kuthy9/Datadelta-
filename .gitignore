@@ -1,0 +1,23 @@
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# ── Tooling ───────────────────────────────────────────────────────────────────
+.venv/
+.pytest_cache/
+.DS_Store
+
+# ── Demo data written by examples/generate_demo_data.py ───────────────────────
+examples/*_before.csv
+examples/*_after.csv
+examples/ab_control.csv
+examples/ab_treatment.csv
+examples/messy_orders.csv
+examples/*.clean.*
+examples/*.xlsx
+
+# ── Reports written by `datadelta diff --export report.html` in the repo root ─
+/report.html

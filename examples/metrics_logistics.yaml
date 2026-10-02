@@ -1,11 +1,11 @@
 # metrics.yaml — Logistics / Warehouse / Trade company example
 #
 # This file defines company-specific KPIs for a logistics business.
-# Run `datadiff diff before.csv after.csv` in this directory and
+# Run `datadelta diff before.csv after.csv` in this directory and
 # these metrics will be evaluated automatically as Layer 4.
 #
 # To generate your own version, run:
-#   datadiff init --from your_data.csv --business "describe your company"
+#   datadelta init --from your_data.csv --business "describe your company"
 
 business_context: |
   We operate a regional logistics and warehouse business. Our core dataset

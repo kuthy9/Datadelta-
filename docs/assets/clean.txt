@@ -1,0 +1,51 @@
+
+data ▲   clean · examples/messy_orders.csv
+────────────────────────────────────────────────────────────────────────────────────────
+rows     305 → 305                                                             unchanged
+
+whitespace
+  region      trimmed        101
+              ' EMEA' → 'EMEA'
+              'APAC ' → 'APAC'
+null_tokens
+  amount      null_token      13   matched "n/a"
+              'N/A' → null
+  quantity    null_token      11   matched "-"
+              '-' → null
+  region      null_token       9   matched "null"
+              'null' → null
+  zip_code    null_token       7   matched "n/a"
+              'N/A' → null
+booleans
+  paid        parsed_bool    305
+              'yes' → True
+              'no' → False
+              'N' → False
+numbers
+  amount      parsed_number  292   currency symbol $ removed
+              '$802.33' → 802.33
+              '$687.54' → 687.54
+              '$1,047.31' → 1047.31
+  quantity    parsed_number  294
+              '11' → 11
+              '28' → 28
+              '２８' → 28
+  zip_code    skipped         25   leading zeros (codes)
+              '09719'
+              '05182'
+              '03785'
+dates
+  order_date  parsed_date    305   formats %Y-%m-%d, %Y/%m/%d, %Y年%m月%d日, %d/%m/%Y;
+                                   day/month order inferred: day first
+              '2024-03-01' → 2024-03-01
+              '2024/03/02' → 2024-03-02
+              '2024年03月03日' → 2024-03-03
+
+  cells changed     1,337
+  columns retyped   paid → boolean · amount → number · quantity → number · order_date →
+                    date
+  nulls             0 → 40
+  duplicate rows    5 · left in place (--dedupe exact drops them)
+  duplicate keys    5
+  dry run · nothing written
+

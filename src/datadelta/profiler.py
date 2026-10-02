@@ -16,8 +16,10 @@ Semantic types and their diff strategies:
   unknown   → null rate only
 """
 
+import warnings
 from dataclasses import dataclass, field
 from typing import Literal
+import numpy as np
 import pandas as pd
 
 
@@ -86,7 +88,8 @@ def _infer_semantic_type(series: pd.Series) -> SemanticType:
     """
     Heuristic pipeline for semantic type detection.
     Order matters: datetime check must come before numeric to avoid
-    misclassifying Unix timestamps as numeric.
+    misclassifying Unix timestamps as numeric, and the boolean check must
+    come before numeric because pandas counts bool as a numeric dtype.
     """
     # 1. Datetime check (regardless of dtype — could be stored as string)
     if _looks_like_datetime(series):
@@ -94,7 +97,12 @@ def _infer_semantic_type(series: pd.Series) -> SemanticType:
 
     dtype = series.dtype
 
-    # 2. Numeric types (int or float)
+    # 2. Booleans (bool, nullable "boolean") are two categories, not numbers:
+    #    quantiles and means of booleans raise or mislead
+    if pd.api.types.is_bool_dtype(dtype):
+        return "category"
+
+    # 3. Numeric types (int or float)
     if pd.api.types.is_numeric_dtype(dtype):
         n_total  = max(len(series), 1)
         n_unique = series.nunique()
@@ -106,7 +114,7 @@ def _infer_semantic_type(series: pd.Series) -> SemanticType:
 
         return "numeric"
 
-    # 3. String / object types
+    # 4. String / object types
     if dtype == object or pd.api.types.is_string_dtype(dtype):
         n_total      = max(len(series), 1)
         unique_ratio = series.nunique() / n_total
@@ -134,6 +142,14 @@ def _looks_like_datetime(series: pd.Series) -> bool:
     """
     Detect datetime columns that might be stored as strings.
     We try to parse a sample and accept if >80% succeed.
+
+    For most text columns pandas cannot guess a format from the first
+    value and warns "Could not infer format ..." on stderr. A probe
+    expects that, and the warning would break --quiet, so it is silenced.
+
+    Number and boolean cells (Excel cells in an object column) never
+    count as dates: pd.to_datetime reads a number as an epoch offset, so
+    a column of amounts would pass as dates and lose its numeric checks.
     """
     if pd.api.types.is_datetime64_any_dtype(series):
         return True
@@ -142,10 +158,15 @@ def _looks_like_datetime(series: pd.Series) -> bool:
         sample = series.dropna().head(50)
         if len(sample) == 0:
             return False
+        numbers = sample.map(lambda v: isinstance(v, (bool, int, float, np.number, np.bool_))).to_numpy(dtype=bool)
+        if numbers.all():
+            return False
         try:
-            parsed = pd.to_datetime(sample, errors="coerce")
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", UserWarning)
+                parsed = pd.to_datetime(sample[~numbers], errors="coerce")
             # Accept if most values parsed successfully (not all NaT)
-            success_rate = parsed.notna().mean()
+            success_rate = parsed.notna().sum() / len(sample)
             return success_rate > 0.8
         except (ValueError, TypeError):
             return False

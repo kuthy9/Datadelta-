@@ -20,7 +20,8 @@ HOW SEVERITY PROMOTION/DEMOTION WORKS:
 
   The custom metrics layer (Layer 4) is never demoted or promoted by scenarios
   — those thresholds are defined by the user in metrics.yaml and are assumed
-  to be intentional.
+  to be intentional. Neither is the clean layer (`diff --clean`): its INFO
+  findings describe how the data was prepared, not how it changed.
 """
 
 from .differ import DiffResult, Finding, Severity
@@ -57,6 +58,9 @@ SCENARIO_LABELS = {
 # Severity scale for promotion/demotion arithmetic
 _SCALE: list[Severity] = ["PASS", "INFO", "WARN", "FAIL"]
 
+# Layers no scenario re-weights
+UNWEIGHTED_LAYERS: frozenset[str] = frozenset({"custom", "clean"})
+
 
 def apply_scenario_lens(result: DiffResult, scenario: str) -> DiffResult:
     """
@@ -71,8 +75,9 @@ def apply_scenario_lens(result: DiffResult, scenario: str) -> DiffResult:
 
     adjusted = []
     for finding in result.findings:
-        # Never adjust custom metrics — the user defined those thresholds explicitly
-        if finding.layer == "custom":
+        # Never adjust custom metrics (the user defined those thresholds
+        # explicitly) or cleaning actions (they describe preparation, not change)
+        if finding.layer in UNWEIGHTED_LAYERS:
             adjusted.append(finding)
             continue
 
@@ -89,7 +94,7 @@ def apply_scenario_lens(result: DiffResult, scenario: str) -> DiffResult:
         ))
 
     # Sort by severity (worst first), then by layer for grouping
-    layer_order = {"schema": 0, "integrity": 1, "distribution": 2, "custom": 3}
+    layer_order = {"clean": -1, "schema": 0, "integrity": 1, "distribution": 2, "custom": 3}
     sev_order   = {"FAIL": 0, "WARN": 1, "INFO": 2, "PASS": 3}
     adjusted.sort(key=lambda f: (sev_order.get(f.severity, 4), layer_order.get(f.layer, 5)))
 

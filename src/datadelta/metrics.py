@@ -30,9 +30,14 @@ METRIC TYPES:
   completeness → What % of values are non-null?
                  Example: customer_id must always be present (> 99%)
 
-  custom      → Arbitrary pandas expression returning a float 0–1 or scalar
+  custom      → A pandas expression returning a float 0–1 or scalar
                 Example: (df['revenue'] > 1000).mean()
-                Note: eval() is used. This is intentional for a developer tool.
+                Evaluated by safe_eval.py, not eval(): only df, whitelisted
+                pandas methods such as mean, sum, isin, str.lower, dt.year,
+                np.log/log1p/sqrt/abs/where/nan, pd.to_datetime/Timestamp/
+                Timedelta and the builtins abs/len/min/max/round/float/int.
+                Anything else (imports, dunders, open(), lambdas, writers
+                such as to_csv) is rejected and reported as a WARN finding.
 
 SEVERITY LOGIC:
   For each metric, we compute the value for both before and after datasets,
@@ -52,6 +57,9 @@ from pathlib import Path
 from typing import Any
 import pandas as pd
 import numpy as np
+
+from .progress  import NullProgress, ProgressSink, plural
+from .safe_eval import safe_eval
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -74,7 +82,7 @@ class MetricDefinition:
     match_value: Any        = None   # the value to count: status == match_value
 
     # Custom expression (for custom type)
-    expression:  str | None = None   # pandas eval string, e.g. "(df['x'] > 0).mean()"
+    expression:  str | None = None   # whitelisted pandas expression (safe_eval.py), e.g. "(df['x'] > 0).mean()"
 
     # Staleness config
     threshold_days: int | None = None
@@ -179,27 +187,46 @@ def evaluate_all_metrics(
     df_before: pd.DataFrame,
     df_after:  pd.DataFrame,
     config:    MetricsConfig,
+    progress:  ProgressSink | None = None,
 ) -> list[Finding]:
     """
     Run all metrics defined in the config against both DataFrames.
     Returns a list of Finding objects to be appended to the DiffResult.
+
+    Progress: one "metrics" stage (total = number of metrics), one
+    advance per metric (note = its name) and one finding() per finding.
     """
+    progress = progress if progress is not None else NullProgress()
     findings = []
+
+    progress.stage_start("metrics", "metrics", total=len(config.metrics))
     for metric in config.metrics:
         try:
             finding = _evaluate_metric(metric, df_before, df_after)
-            findings.append(finding)
         except Exception as e:
             # A broken metric definition should not crash the whole diff.
             # Report it as a WARN so the user can fix their metrics.yaml.
-            findings.append(Finding(
+            # The title keeps the full message for the local reader; the
+            # metric dict carries only the name and exception type so that
+            # story_payload() can rebuild the title without the message,
+            # which pandas/numpy may fill with a cell value.
+            finding = Finding(
                 layer    = "custom",
                 column   = metric.column,
                 severity = "WARN",
                 title    = f"[metrics.yaml error] '{metric.name}': {e}",
                 detail   = f"Check your metrics.yaml definition for '{metric.name}'.",
-                metric   = {},
-            ))
+                metric   = {
+                    "name":       metric.name,
+                    "error":      True,
+                    "error_type": type(e).__name__,
+                },
+            )
+        findings.append(finding)
+        progress.finding(finding.severity)
+        progress.advance("metrics", 1, note=metric.name)
+    progress.stage_end("metrics", "done", summary=plural(len(findings), "metric"))
+
     return findings
 
 
@@ -343,16 +370,19 @@ def _compute_completeness(metric: MetricDefinition, df: pd.DataFrame) -> float:
 
 def _compute_custom(metric: MetricDefinition, df: pd.DataFrame) -> float:
     """
-    Evaluate an arbitrary pandas expression.
+    Evaluate a whitelisted pandas expression (see safe_eval.py).
     The expression has access to:
       df  → the full DataFrame
-      pd  → pandas
-      np  → numpy
+      np  → numpy, only np.log / log1p / sqrt / abs / where / nan
+      pd  → pandas, only pd.to_datetime / Timestamp / Timedelta
+      abs, len, min, max, round, float, int
 
     SECURITY NOTE:
-      eval() executes arbitrary Python code. This is acceptable for a
-      developer CLI tool where the user controls their own metrics.yaml.
-      Do NOT use this in a web service that accepts user-provided expressions.
+      metrics.yaml is shared and committed, so it is untrusted input for
+      whoever runs the diff. safe_eval() validates every AST node before
+      evaluating; a disallowed construct raises UnsafeExpressionError,
+      which evaluate_all_metrics() turns into a WARN finding — the
+      expression is never executed.
 
     Example: "(df['revenue'] > 1000).mean()"
     Example: "df['revenue'].sum() / df['order_count'].sum()"
@@ -360,7 +390,7 @@ def _compute_custom(metric: MetricDefinition, df: pd.DataFrame) -> float:
     if not metric.expression:
         raise ValueError("custom metric requires 'expression'")
 
-    result = eval(metric.expression, {"df": df, "pd": pd, "np": np})  # noqa: S307
+    result = safe_eval(metric.expression, df)
 
     # Coerce to float — the expression might return a numpy scalar
     return float(result)

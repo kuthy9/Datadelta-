@@ -23,13 +23,27 @@ Runs four layers of analysis in sequence:
     User-defined KPIs from metrics.yaml.
     Only runs if a MetricsConfig is provided (i.e., metrics.yaml exists).
 
+  Clean layer — `diff --clean` only (NEW in v0.3)
+    Not computed here: the CLI cleans both sides first and prepends one
+    INFO finding per cleaning action (clean/findings.py), and stores both
+    CleanReports in DiffResult.cleaning.
+
 Each finding has a severity: FAIL / WARN / INFO / PASS
 The `threshold` parameter (default 0.10 = 10%) controls sensitivity
 for distribution shift warnings.
+
+PROGRESS:
+  compute_diff() reports one progress stage per layer — "schema",
+  "distribution" (one advance per column present on both sides) and
+  "integrity" ("skipped" when there is no key column) — plus one
+  progress.finding() per finding as it is produced. Layer 4 reports its
+  own "metrics" stage (metrics.evaluate_all_metrics). Without a sink
+  these calls go to NullProgress and cost nothing.
 """
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, field
 from typing import Literal, TYPE_CHECKING
 import pandas as pd
@@ -37,6 +51,7 @@ import numpy as np
 from scipy import stats
 
 from .profiler import DataProfile
+from .progress import NullProgress, ProgressSink, error_summary, plural
 
 # Avoid circular import: metrics.py imports Finding from differ.py
 # We use TYPE_CHECKING to allow the type hint without runtime import
@@ -56,14 +71,14 @@ class Finding:
     """
     A single diff finding — one specific thing that changed (or didn't).
 
-    layer:    Which analysis layer produced this (schema/distribution/integrity/custom)
+    layer:    Which analysis layer produced this (clean/schema/distribution/integrity/custom)
     column:   Which column it relates to (None for table-level findings)
     severity: How serious is this? FAIL > WARN > INFO > PASS
     title:    One-line summary shown in the terminal
     detail:   Longer explanation shown in HTML report and --verbose mode
     metric:   Raw numbers for JSON export, HTML charts, and LLM context
     """
-    layer:    Literal["schema", "distribution", "integrity", "custom"]
+    layer:    Literal["clean", "schema", "distribution", "integrity", "custom"]
     column:   str | None
     severity: Severity
     title:    str
@@ -86,6 +101,13 @@ class DiffResult:
     findings: list[Finding] = field(default_factory=list)
     scenario: str           = "general"
 
+    # `diff --clean` only: {"before": CleanReport.to_dict(), "after": ...}
+    cleaning: dict | None   = None
+
+    # The key column the integrity layer used (--key, or the auto-detected
+    # id column); None without one. story.py withholds its values.
+    key_column: str | None  = None
+
     @property
     def has_failures(self) -> bool:
         return any(f.severity == "FAIL" for f in self.findings)
@@ -101,8 +123,11 @@ class DiffResult:
         return "PASS"
 
     def to_dict(self) -> dict:
-        """Serialize to dict for JSON output and LLM context."""
-        return {
+        """
+        Serialize to dict for JSON output and LLM context.
+        The "cleaning" key appears only for `diff --clean`.
+        """
+        out = {
             "summary": {
                 "severity":      self.summary_severity,
                 "rows_before":   self.rows_before,
@@ -122,6 +147,9 @@ class DiffResult:
                 for f in self.findings
             ],
         }
+        if self.cleaning is not None:
+            out["cleaning"] = self.cleaning
+        return out
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -135,11 +163,14 @@ def compute_diff(
     key_column:     str | None,
     threshold:      float = 0.10,
     metrics_config: "MetricsConfig | None" = None,
+    progress:       ProgressSink | None = None,
 ) -> DiffResult:
     """
     Run all four diff layers and return a DiffResult.
     metrics_config is optional; if None, Layer 4 is skipped.
+    progress receives one stage per layer and one finding() per finding.
     """
+    progress      = progress if progress is not None else NullProgress()
     row_delta     = len(df_after) - len(df_before)
     row_delta_pct = row_delta / max(len(df_before), 1)
 
@@ -150,17 +181,58 @@ def compute_diff(
         row_delta_pct = row_delta_pct,
     )
 
-    # Run the four layers
-    result.findings.extend(_schema_diff(df_before, df_after, profile))
-    result.findings.extend(_distribution_diff(df_before, df_after, profile, threshold))
-    result.findings.extend(_integrity_diff(df_before, df_after, profile, key_column))
+    stage = "schema"
+    try:
+        # ── Layer 1: schema ───────────────────────────────────────────────
+        progress.stage_start("schema", "schema")
+        schema = _schema_diff(df_before, df_after, profile)
+        _report_findings(progress, schema)
+        result.findings.extend(schema)
+        progress.stage_end("schema", "done", summary=plural(len(schema), "change"))
 
-    # Layer 4: only if metrics.yaml was loaded
+        # ── Layer 2: distribution, one advance per common column ──────────
+        stage = "distribution"
+        progress.stage_start("distribution", "distribution", total=len(_common_columns(profile)))
+        distribution = _distribution_diff(df_before, df_after, profile, threshold, progress=progress)
+        result.findings.extend(distribution)
+        progress.stage_end("distribution", "done", summary=plural(len(distribution), "finding"))
+
+        # ── Layer 3: integrity ────────────────────────────────────────────
+        stage = "integrity"
+        key = _resolve_key(df_before, df_after, profile, key_column)
+        result.key_column = key
+        progress.stage_start("integrity", "integrity", note="" if key is None else str(key))
+        integrity = _integrity_diff(df_before, df_after, profile, key_column)
+        _report_findings(progress, integrity)
+        result.findings.extend(integrity)
+        if key is None:
+            reason = "no key column" if key_column is None else f"key '{key_column}' is not on both sides"
+            progress.stage_end("integrity", "skipped", summary=reason)
+        else:
+            progress.stage_end("integrity", "done", summary=plural(len(integrity), "finding"))
+    except Exception as e:
+        progress.stage_end(stage, "failed", summary=error_summary(e))
+        raise
+
+    # Layer 4: only if metrics.yaml was loaded (it reports its own "metrics" stage)
     if metrics_config and metrics_config.has_metrics:
         from .metrics import evaluate_all_metrics
-        result.findings.extend(evaluate_all_metrics(df_before, df_after, metrics_config))
+        result.findings.extend(
+            evaluate_all_metrics(df_before, df_after, metrics_config, progress=progress)
+        )
 
     return result
+
+
+def _report_findings(progress: ProgressSink, findings: list[Finding]) -> None:
+    """One progress.finding() per finding, so the live tally counts as we go."""
+    for finding in findings:
+        progress.finding(finding.severity)
+
+
+def _common_columns(profile: DataProfile) -> list[str]:
+    """Columns present in both datasets — the ones Layer 2 compares."""
+    return [col for col, cp in profile.columns.items() if cp.exists_in_before and cp.exists_in_after]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -223,34 +295,71 @@ def _distribution_diff(
     df_after:  pd.DataFrame,
     profile:   DataProfile,
     threshold: float,
+    progress:  ProgressSink | None = None,
 ) -> list[Finding]:
+    """
+    Compare every column present on both sides. Reports one
+    progress.advance("distribution", note=<column>) per column and one
+    progress.finding() per finding; the caller owns the stage itself.
+    """
+    progress = progress if progress is not None else NullProgress()
     findings = []
 
-    for col, cp in profile.columns.items():
-        # Skip columns that don't exist in both datasets
+    for col in _common_columns(profile):
+        # Columns missing from one side are skipped by _common_columns
         # (already handled by schema diff)
-        if not (cp.exists_in_before and cp.exists_in_after):
-            continue
-
+        cp       = profile.columns[col]
         s_before = df_before[col]
         s_after  = df_after[col]
+        column_findings: list[Finding] = []
 
         # Null rate applies to ALL column types
         null_finding = _check_null_rate(col, s_before, s_after, threshold)
         if null_finding:
-            findings.append(null_finding)
+            column_findings.append(null_finding)
 
-        # Type-specific distribution checks
-        if cp.semantic_type == "numeric":
-            findings.extend(_numeric_diff(col, s_before.dropna(), s_after.dropna(), threshold))
+        # Type-specific distribution checks. The semantic type comes from
+        # the before side; numbers and categories are compared only when
+        # both sides hold the same kind of value (means of text raise, and
+        # True vs "yes" is not a category change). A type change is the
+        # schema layer's finding. Dates parse text on purpose.
+        same_kind = _value_kind(s_before) == _value_kind(s_after)
+        if cp.semantic_type == "numeric" and same_kind:
+            column_findings.extend(_numeric_diff(col, s_before.dropna(), s_after.dropna(), threshold))
 
-        elif cp.semantic_type == "category":
-            findings.extend(_category_diff(col, s_before.dropna(), s_after.dropna(), threshold))
+        elif cp.semantic_type == "category" and same_kind:
+            column_findings.extend(_category_diff(col, s_before.dropna(), s_after.dropna(), threshold))
 
         elif cp.semantic_type == "datetime":
-            findings.extend(_datetime_diff(col, s_before.dropna(), s_after.dropna()))
+            column_findings.extend(_datetime_diff(col, s_before.dropna(), s_after.dropna()))
+
+        _report_findings(progress, column_findings)
+        findings.extend(column_findings)
+        progress.advance("distribution", 1, note=str(col))
 
     return findings
+
+
+def _value_kind(s: pd.Series) -> str:
+    """
+    What a column stores: "bool", "number", "datetime" (with its zone) or
+    "text" (anything else). An object column holding only booleans or only
+    ints and floats (Excel with blank cells) counts as that kind.
+    """
+    dtype = s.dtype
+    if pd.api.types.is_bool_dtype(dtype):
+        return "bool"
+    if pd.api.types.is_numeric_dtype(dtype):
+        return "number"
+    if pd.api.types.is_datetime64_any_dtype(dtype):
+        return f"datetime {getattr(dtype, 'tz', None)}"
+    if pd.api.types.is_object_dtype(dtype):
+        inferred = pd.api.types.infer_dtype(s, skipna=True)
+        if inferred == "boolean":
+            return "bool"
+        if inferred in ("integer", "floating", "mixed-integer-float"):
+            return "number"
+    return "text"
 
 
 def _check_null_rate(
@@ -443,11 +552,19 @@ def _datetime_diff(
     s_before: pd.Series,
     s_after:  pd.Series,
 ) -> list[Finding]:
-    """Report changes in the time range covered by the column."""
+    """
+    Report changes in the time range covered by the column.
+
+    Text dates are parsed with errors="coerce"; pandas' "Could not infer
+    format ..." warning for them is silenced, as in the profiler's probe,
+    so it never reaches stderr (--quiet).
+    """
     findings = []
     try:
-        dt_before = pd.to_datetime(s_before, errors="coerce").dropna()
-        dt_after  = pd.to_datetime(s_after,  errors="coerce").dropna()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            dt_before = pd.to_datetime(s_before, errors="coerce").dropna()
+            dt_after  = pd.to_datetime(s_after,  errors="coerce").dropna()
 
         if len(dt_before) == 0 or len(dt_after) == 0:
             return findings
@@ -488,18 +605,33 @@ def _integrity_diff(
     profile:    DataProfile,
     key_column: str | None,
 ) -> list[Finding]:
-    # Auto-detect a key column if the user didn't specify one
+    key = _resolve_key(df_before, df_after, profile, key_column)
+    if key is None:
+        return []  # No key to track, or it is missing from one side (schema diff reports that)
+    return _key_integrity(df_before, df_after, key)
+
+
+def _resolve_key(
+    df_before:  pd.DataFrame,
+    df_after:   pd.DataFrame,
+    profile:    DataProfile,
+    key_column: str | None,
+) -> str | None:
+    """
+    The --key column, or the first auto-detected ID column when none was
+    given. None when there is no candidate or it is not in both datasets.
+    """
     if key_column is None:
         id_cols    = [col for col, cp in profile.columns.items() if cp.semantic_type == "id"]
         key_column = id_cols[0] if id_cols else None
 
     if key_column is None:
-        return []  # No key to track
+        return None
 
     if key_column not in df_before.columns or key_column not in df_after.columns:
-        return []  # Key column missing from one side (already caught by schema diff)
+        return None
 
-    return _key_integrity(df_before, df_after, key_column)
+    return key_column
 
 
 def _key_integrity(
